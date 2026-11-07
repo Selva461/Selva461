@@ -39,6 +39,16 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".HealthActivity"
+            android:exported="false"
+            android:label="Battery health" />
+
+        <service
+            android:name=".BatteryLog$LogJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <service
             android:name=".WatchdogService"
             android:exported="false"

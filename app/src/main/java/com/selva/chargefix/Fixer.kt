@@ -77,7 +77,7 @@ object Fixer {
                     say("Connected to Wireless debugging.")
                     order.firstOrNull { m -> attempt(m) { sh.usbOp(m.key) } }
                 }
-                if (fixedBy != null) return Outcome(true, fixedBy, log.toString())
+                if (fixedBy != null) { BatteryStats.countFakeFix(ctx); return Outcome(true, fixedBy, log.toString()) }
             } catch (e: AdbShell.NotReady) {
                 say(e.message ?: "Not ready.")
                 return Outcome(false, null, log.toString())

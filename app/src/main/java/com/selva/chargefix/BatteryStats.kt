@@ -41,7 +41,7 @@ object BatteryStats {
     // ------------------------------------------------------------- exact numbers from the phone
 
     /** Places phones keep battery facts. OnePlus/OPlus keep exact cycle count & capacity. */
-    private val NODES = listOf(
+    val NODES = listOf(
         "/sys/class/oplus_chg/battery/battery_cc",
         "/sys/class/oplus_chg/battery/battery_fcc",
         "/sys/class/oplus_chg/battery/battery_soh",
