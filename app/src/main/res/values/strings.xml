@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Charge Fix</string>
+    <string name="tile_label">Fix charging</string>
+    <string name="help_text">With a non-original cable, the phone and charger sometimes fail their fast-charge handshake. The phone stays stuck showing the charging bolt while almost no power flows, so the battery still drains. A restart fixes it because it resets the charging chip.\n\nWith ROOT, the buttons above do the same reset without restarting: they switch the charging input off for a few seconds and back on.\n\nWithout root, Android does not let any app control the charger, so this app can only warn you. To fix it: unplug, restart the phone, then plug in. Long term, use a good cable rated for your OnePlus charger (SUPERVOOC/Warp cables have extra contacts). Cheap cables cause exactly this.</string>
+</resources>
