@@ -72,29 +72,29 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="No-root mode (Shizuku)"
+                    android:text="No-root mode"
                     android:textAppearance="?attr/textAppearanceTitleMedium" />
 
                 <TextView
-                    android:id="@+id/tvShizuku"
+                    android:id="@+id/tvAdb"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnShizuku"
+                    android:id="@+id/btnAdbSetup"
                     style="@style/Widget.Material3.Button.TonalButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnUsbInfo"
+                    android:id="@+id/btnAdbTest"
                     style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Show USB port info" />
+                    android:text="Test connection" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

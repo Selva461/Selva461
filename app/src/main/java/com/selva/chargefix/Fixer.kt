@@ -4,16 +4,16 @@ import android.content.Context
 
 /**
  * Picks whatever way of kicking the charger is available on this phone:
- * root (sysfs switch) if present, otherwise Shizuku + USB-port commands.
+ * root (sysfs switch) if present, otherwise the app's own ADB connection + USB-port commands.
  * Every no-root method is verified by actually measuring the current afterwards.
  */
 object Fixer {
 
     enum class Method(val key: String, val label: String) {
         ROOT("root", "Root: charging switch off/on"),
-        LIMIT_POWER(ShellUserService.OP_LIMIT_POWER, "Limit USB power on/off"),
-        PORT_RESET(ShellUserService.OP_PORT_RESET, "Reset USB-C port"),
-        ROLE_SWAP(ShellUserService.OP_ROLE_SWAP, "USB power-role swap"),
+        LIMIT_POWER(UsbOps.OP_LIMIT_POWER, "Limit USB power on/off"),
+        PORT_RESET(UsbOps.OP_PORT_RESET, "Reset USB-C port"),
+        ROLE_SWAP(UsbOps.OP_ROLE_SWAP, "USB power-role swap"),
     }
 
     private val NO_ROOT_METHODS = listOf(Method.LIMIT_POWER, Method.PORT_RESET, Method.ROLE_SWAP)
@@ -26,11 +26,8 @@ object Fixer {
         prefs(c).getString("working", null)?.let { k -> Method.entries.firstOrNull { it.key == k } }
     private fun remember(c: Context, m: Method) = prefs(c).edit().putString("working", m.key).apply()
 
-    /** Runs one method once (no verification). Blocking. */
-    fun run(m: Method): String = when (m) {
-        Method.ROOT -> ChargeControl.resetCharging().let { (if (it.ok) "OK\n" else "Failed\n") + it.output }
-        else -> ShizukuShell.get()?.usbOp(m.key, 4) ?: "Shizuku not connected"
-    }
+    private fun runRoot(): String =
+        ChargeControl.resetCharging().let { (if (it.ok) "OK\n" else "Failed\n") + it.output }
 
     /**
      * The main "fix it" action. Tries the method that worked before first, then all the
@@ -47,28 +44,40 @@ object Fixer {
             return Outcome(true, null, log.toString())
         }
 
-        val candidates = buildList {
-            if (hasRoot) add(Method.ROOT)
-            if (ShizukuShell.state(ctx) == ShizukuShell.State.READY) addAll(NO_ROOT_METHODS)
-        }.sortedByDescending { it == workingMethod(ctx) }
-
-        if (candidates.isEmpty()) {
-            say("No way to control the charger: no root, and Shizuku isn't running.")
-            return Outcome(false, null, log.toString())
-        }
-
-        for (m in candidates) {
+        fun attempt(m: Method, runner: () -> String): Boolean {
             say("▶ ${m.label}…")
-            say(run(m).prependIndent("   "))
+            say(runner().prependIndent("   "))
             if (waitForRealCharging(ctx)) {
                 val s = BatteryReader.read(ctx)
                 say("✓ FIXED - really charging now (+${s.netCurrentMa} mA).")
                 remember(ctx, m)
-                return Outcome(true, m, log.toString())
+                return true
             }
             say("   ✗ still not charging.")
+            return false
         }
-        say("None of the methods fixed it on this phone. Unplug, restart, plug in.")
+
+        if (hasRoot && attempt(Method.ROOT, ::runRoot)) return Outcome(true, Method.ROOT, log.toString())
+
+        if (!AdbShell.isPaired(ctx)) {
+            if (!hasRoot) say("No-root mode isn't set up yet. Tap \"Set up no-root mode\" first.")
+        } else {
+            val order = NO_ROOT_METHODS.sortedByDescending { it == workingMethod(ctx) }
+            try {
+                val fixedBy = AdbShell.session(ctx) { sh ->
+                    say("Connected to Wireless debugging.")
+                    order.firstOrNull { m -> attempt(m) { sh.usbOp(m.key) } }
+                }
+                if (fixedBy != null) return Outcome(true, fixedBy, log.toString())
+            } catch (e: AdbShell.NotReady) {
+                say(e.message ?: "Not ready.")
+                return Outcome(false, null, log.toString())
+            } catch (e: Exception) {
+                say("ADB error: ${e.message ?: e}")
+                return Outcome(false, null, log.toString())
+            }
+        }
+        say("Nothing fixed it this time. Unplug, restart the phone, plug in.")
         return Outcome(false, null, log.toString())
     }
 

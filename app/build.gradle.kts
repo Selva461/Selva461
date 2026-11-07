@@ -11,8 +11,10 @@ android {
         applicationId = "com.selva.chargefix"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "3.0"
+        // The OnePlus 9R (and nearly every phone since 2017) is 64-bit ARM.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {
@@ -27,7 +29,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
-        aidl = true
         buildConfig = true
     }
     kotlinOptions {
@@ -39,7 +40,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
-    // Shizuku: lets the app run commands with ADB "shell" rights without root.
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
+    // Built-in ADB client: the app connects to its own phone over Wireless debugging
+    // to get "shell" rights without root and without any other app.
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
+    // Creates the self-signed certificate that identifies the app to adbd.
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 }

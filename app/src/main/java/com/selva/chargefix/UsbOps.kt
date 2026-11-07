@@ -5,20 +5,16 @@ import android.os.IBinder
 import android.os.Parcel
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.system.exitProcess
 
 /**
- * Runs inside a separate process that Shizuku starts with ADB "shell" rights
- * (uid 2000). The shell user holds MANAGE_USB, so it may command the USB-C port
- * controller - something a normal app can't do - without needing root.
+ * USB-C port commands. These run inside a short-lived process that the app starts
+ * over its own ADB connection (see AdbShell), so it has ADB "shell" rights (uid 2000).
+ * The shell user holds MANAGE_USB, so it may command the USB-C port controller -
+ * something a normal app can't do - without needing root.
  */
-class ShellUserService : IShellService.Stub() {
+object UsbOps {
 
-    override fun destroy() {
-        exitProcess(0)
-    }
-
-    override fun exec(cmd: String): String = try {
+    fun exec(cmd: String): String = try {
         val p = ProcessBuilder("sh", "-c", cmd).redirectErrorStream(true).start()
         val out = p.inputStream.bufferedReader().readText()
         p.waitFor(60, TimeUnit.SECONDS)
@@ -27,7 +23,7 @@ class ShellUserService : IShellService.Stub() {
         "exec failed: $e"
     }
 
-    override fun usbOp(op: String, pauseSec: Int): String {
+    fun usbOp(op: String, pauseSec: Int): String {
         val log = StringBuilder()
         try {
             val mgr = usbManager()
@@ -111,23 +107,22 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    companion object {
-        const val OP_LIMIT_POWER = "limit_power"
-        const val OP_PORT_RESET = "port_reset"
-        const val OP_ROLE_SWAP = "role_swap"
-        const val OP_INFO = "info"
-        private const val STATUS_TIMEOUT = -100
-        private const val STATUS_NO_METHOD = -101
+    // ---- constants ----
+    const val OP_LIMIT_POWER = "limit_power"
+    const val OP_PORT_RESET = "port_reset"
+    const val OP_ROLE_SWAP = "role_swap"
+    const val OP_INFO = "info"
+    private const val STATUS_TIMEOUT = -100
+    private const val STATUS_NO_METHOD = -101
 
-        fun statusName(s: Int) = when (s) {
-            0 -> "SUCCESS"
-            1 -> "ERROR_INTERNAL"
-            2 -> "NOT_SUPPORTED by this phone's USB driver"
-            3 -> "PORT_MISMATCH"
-            4 -> "ERROR_OTHER"
-            STATUS_TIMEOUT -> "no answer (timeout)"
-            STATUS_NO_METHOD -> "not available on this Android version"
-            else -> "status $s"
-        }
+    fun statusName(s: Int) = when (s) {
+        0 -> "SUCCESS"
+        1 -> "ERROR_INTERNAL"
+        2 -> "NOT_SUPPORTED by this phone's USB driver"
+        3 -> "PORT_MISMATCH"
+        4 -> "ERROR_OTHER"
+        STATUS_TIMEOUT -> "no answer (timeout)"
+        STATUS_NO_METHOD -> "not available on this Android version"
+        else -> "status $s"
     }
 }

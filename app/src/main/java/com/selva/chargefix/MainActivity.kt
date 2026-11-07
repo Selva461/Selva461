@@ -7,8 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.net.Uri
-import rikka.shizuku.Shizuku
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -40,13 +38,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controlButtons: List<MaterialButton>
     private lateinit var rootButtons: List<MaterialButton>
     private lateinit var btnReset: MaterialButton
-    private lateinit var tvShizuku: TextView
-    private lateinit var btnShizuku: MaterialButton
+    private lateinit var tvAdb: TextView
+    private lateinit var btnAdbSetup: MaterialButton
+    private lateinit var btnAdbTest: MaterialButton
     private var fixing = false
-
-    private val shizukuPermListener = Shizuku.OnRequestPermissionResultListener { _, _ -> ui.post { updateShizuku() } }
-    private val shizukuBinderListener = Shizuku.OnBinderReceivedListener { ui.post { updateShizuku() } }
-    private val shizukuDeadListener = Shizuku.OnBinderDeadListener { ui.post { updateShizuku() } }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) = refresh()
@@ -69,8 +64,9 @@ class MainActivity : AppCompatActivity() {
         swAutoFix = findViewById(R.id.swAutoFix)
 
         btnReset = findViewById(R.id.btnReset)
-        tvShizuku = findViewById(R.id.tvShizuku)
-        btnShizuku = findViewById(R.id.btnShizuku)
+        tvAdb = findViewById(R.id.tvAdb)
+        btnAdbSetup = findViewById(R.id.btnAdbSetup)
+        btnAdbTest = findViewById(R.id.btnAdbTest)
         val btnStop = findViewById<MaterialButton>(R.id.btnStop)
         val btnStart = findViewById<MaterialButton>(R.id.btnStart)
         val btnReboot = findViewById<MaterialButton>(R.id.btnReboot)
@@ -78,18 +74,8 @@ class MainActivity : AppCompatActivity() {
         rootButtons = listOf(btnStop, btnStart, btnReboot)
 
         btnReset.setOnClickListener { runFix() }
-        btnShizuku.setOnClickListener { onShizukuButton() }
-        findViewById<MaterialButton>(R.id.btnUsbInfo).setOnClickListener {
-            tvLog.text = "Reading USB port info…"
-            io.execute {
-                val info = ShizukuShell.get()?.usbOp(ShellUserService.OP_INFO, 0)
-                    ?: "Shizuku isn't connected yet (see No-root mode)."
-                ui.post { tvLog.text = info }
-            }
-        }
-        Shizuku.addRequestPermissionResultListener(shizukuPermListener)
-        Shizuku.addBinderReceivedListenerSticky(shizukuBinderListener)
-        Shizuku.addBinderDeadListener(shizukuDeadListener)
+        btnAdbSetup.setOnClickListener { onSetupButton() }
+        btnAdbTest.setOnClickListener { testAdb() }
         btnStop.setOnClickListener { runRoot("Turning charging OFF…") { ChargeControl.stopCharging() } }
         btnStart.setOnClickListener { runRoot("Turning charging ON…") { ChargeControl.startCharging() } }
         btnReboot.setOnClickListener {
@@ -129,7 +115,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.registerReceiver(this, batteryReceiver,
             IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         ui.post(poll)
-        updateShizuku()
+        updateAdb()
     }
 
     override fun onPause() {
@@ -139,9 +125,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        Shizuku.removeRequestPermissionResultListener(shizukuPermListener)
-        Shizuku.removeBinderReceivedListener(shizukuBinderListener)
-        Shizuku.removeBinderDeadListener(shizukuDeadListener)
         io.shutdown()
         super.onDestroy()
     }
@@ -181,7 +164,7 @@ class MainActivity : AppCompatActivity() {
                 tvRoot.text = when {
                     root && nodes.isNotEmpty() -> "✓ Root access OK · ${nodes.size} charging switch(es) found"
                     root -> "✓ Root OK, but no known charging switch was seen yet (will still try)."
-                    else -> "No root - \"Fix charging now\" uses Shizuku instead (see above). " +
+                    else -> "No root - \"Fix charging now\" uses no-root mode instead (see above). " +
                         "The three root-only buttons below are greyed out."
                 }
                 rootButtons.forEach { it.alpha = if (root) 1f else 0.4f }
@@ -209,12 +192,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun runFix() {
         if (fixing) return
-        if (!hasRoot && ShizukuShell.state(this) != ShizukuShell.State.READY) {
-            AlertDialog.Builder(this)
-                .setTitle("Set up Shizuku first")
-                .setMessage("Your phone isn't rooted, so the fix needs Shizuku running.\n\n" + getString(R.string.shizuku_steps))
-                .setPositiveButton("OK", null)
-                .show()
+        if (!hasRoot && !AdbShell.isPaired(this)) {
+            showSetupDialog()
             return
         }
         fixing = true
@@ -233,61 +212,63 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateShizuku() {
+    private fun updateAdb() {
+        val paired = AdbShell.isPaired(this)
+        val toggle = AdbShell.canToggleWirelessDebugging(this)
         val working = Fixer.workingMethod(this)
-        when (ShizukuShell.state(this)) {
-            ShizukuShell.State.NOT_INSTALLED -> {
-                tvShizuku.text = "Your phone isn't rooted. Install the free app Shizuku to let Charge Fix " +
-                    "control the USB-C port without root."
-                btnShizuku.text = "Install Shizuku"
-            }
-            ShizukuShell.State.NOT_RUNNING -> {
-                tvShizuku.text = "Shizuku is installed but not started. (It has to be started again after every phone restart.)"
-                btnShizuku.text = "How to start Shizuku"
-            }
-            ShizukuShell.State.NO_PERMISSION -> {
-                tvShizuku.text = "Shizuku is running. Allow Charge Fix to use it."
-                btnShizuku.text = "Grant permission"
-            }
-            ShizukuShell.State.READY -> {
-                tvShizuku.text = "✓ Connected - \"Fix charging now\" works without root." +
-                    (working?.let { "\nWorked last time on this phone: ${it.label}" } ?: "")
-                btnShizuku.text = "Test connection"
-            }
-        }
+        tvAdb.text = when {
+            !paired -> "Not set up. Charge Fix pairs with your phone's own Wireless debugging once " +
+                "(about 2 minutes). No other app needed."
+            toggle -> "✓ Ready. On Wi-Fi, \"Fix charging now\" switches Wireless debugging on for a few " +
+                "seconds, fixes, and switches it off again."
+            else -> "✓ Paired. Turn on Wireless debugging before pressing Fix (the app couldn't get " +
+                "permission to switch it itself)."
+        } + (working?.takeIf { it != Fixer.Method.ROOT }?.let { "\nWorked last time: ${it.label}" } ?: "")
+        btnAdbSetup.text = if (paired) "Forget pairing" else "Set up no-root mode"
+        btnAdbTest.visibility = if (paired) android.view.View.VISIBLE else android.view.View.GONE
     }
 
-    private fun onShizukuButton() {
-        when (ShizukuShell.state(this)) {
-            ShizukuShell.State.NOT_INSTALLED -> {
-                val id = ShizukuShell.SHIZUKU_PACKAGE
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id")))
-                } catch (e: Exception) {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id")))
+    private fun onSetupButton() {
+        if (!AdbShell.isPaired(this)) { showSetupDialog(); return }
+        AlertDialog.Builder(this)
+            .setTitle("Forget pairing?")
+            .setMessage("Charge Fix will delete its key. Also remove \"Charge Fix\" under Wireless debugging → Paired devices.")
+            .setPositiveButton("Forget") { _, _ -> AdbShell.forget(this); updateAdb() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSetupDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Set up no-root mode")
+            .setMessage(getString(R.string.adb_steps))
+            .setPositiveButton("Start") { _, _ ->
+                askNotificationPermission()
+                PairingService.start(this)
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                }.onFailure {
+                    Toast.makeText(this, "Turn on Developer options first (see step 1).", Toast.LENGTH_LONG).show()
                 }
             }
-            ShizukuShell.State.NOT_RUNNING -> AlertDialog.Builder(this)
-                .setTitle("Start Shizuku")
-                .setMessage(getString(R.string.shizuku_steps))
-                .setPositiveButton("Open Shizuku") { _, _ ->
-                    packageManager.getLaunchIntentForPackage(ShizukuShell.SHIZUKU_PACKAGE)?.let { startActivity(it) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun testAdb() {
+        tvLog.text = "Connecting to Wireless debugging…"
+        io.execute {
+            val out = try {
+                AdbShell.session(this) { sh ->
+                    val id = sh.run("id")
+                    val usb = sh.usbOp(UsbOps.OP_INFO, 0)
+                    (if (id.contains("uid=2000")) "✓ Works - shell access OK\n" else "$id\n") + usb
                 }
-                .setNeutralButton("Open Developer options") { _, _ ->
-                    runCatching { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-                }
-                .setNegativeButton("Close", null)
-                .show()
-            ShizukuShell.State.NO_PERMISSION -> ShizukuShell.requestPermission()
-            ShizukuShell.State.READY -> {
-                tvLog.text = "Testing Shizuku…"
-                io.execute {
-                    val out = ShizukuShell.get()?.exec("id") ?: "Couldn't connect to Shizuku."
-                    ui.post { tvLog.text = if (out.contains("uid=2000") || out.contains("uid=0")) "✓ Shizuku works: $out" else out }
-                }
+            } catch (e: Exception) {
+                "✗ ${e.message ?: e}"
             }
+            ui.post { tvLog.text = out; updateAdb() }
         }
-        updateShizuku()
     }
 
     private fun askNotificationPermission() {
