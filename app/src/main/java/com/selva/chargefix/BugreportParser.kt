@@ -34,6 +34,8 @@ class BugreportParser {
         var linesRead: Long = 0,
         /** Battery identity facts (serial, manufacture date, type...) if the phone exposes them. */
         val ids: MutableMap<String, String> = linkedMapOf(),
+        /** Past readings with real timestamps, from Android's battery history (thinned to ~1 per 5 min). */
+        val history: MutableList<LogEntry> = mutableListOf(),
     )
 
     private val r = Result()
@@ -58,8 +60,15 @@ class BugreportParser {
     private val histLine = Regex("""^\s+\+?((?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+s)?(?:\d+ms)?|0)\s+\(\d+\)\s+(\d{3})\b(.*)$""")
     private var inHistory = false
     private val hist = ArrayList<Triple<Long, Int, Boolean>>() // time ms, level, plugged
-    private var histScreenOn = false
+    private var histScreenOn: Boolean? = null
     private var histPlugged = false
+    private var histTemp = 0f
+    private var histVolt = 0
+    private var histCharge = -1
+    private var timeBase: Long? = null   // absolute ms = timeBase + offset
+    private val timeLine = Regex("""^\s+\+?((?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+s)?(?:\d+ms)?|0)\s+\(\d+\)\s+(?:RESET:)?TIME:\s+(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})""")
+    private val dateFmt = java.text.SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", java.util.Locale.US)
+    private val kv = Regex("""\b(plug|temp|volt|charge)=(\w+)""")
 
     private val idName = Regex("""(?i)(sn|serial|manu|date|type|vendor|auth|_id|batt_id|model)""")
 
@@ -107,14 +116,41 @@ class BugreportParser {
             if (line.isBlank() || line.startsWith("Per-PID") || line.startsWith("Daily stats") || line.startsWith("Statistics since")) {
                 inHistory = false; return
             }
+            timeLine.find(line)?.let { m ->
+                runCatching { dateFmt.parse(m.groupValues[2])!!.time }.getOrNull()?.let { abs ->
+                    timeBase = abs - parseDur(m.groupValues[1])
+                }
+                return
+            }
             histLine.find(line)?.let { m ->
                 val t = parseDur(m.groupValues[1])
+                val level = m.groupValues[2].toInt()
                 val rest = m.groupValues[3]
                 if (rest.contains("+screen")) histScreenOn = true
                 if (rest.contains("-screen")) histScreenOn = false
                 if (rest.contains("+plugged") || rest.contains("status=charging")) histPlugged = true
                 if (rest.contains("-plugged") || rest.contains("status=discharging")) histPlugged = false
-                hist.add(Triple(t, m.groupValues[2].toInt(), histPlugged))
+                kv.findAll(rest).forEach { k ->
+                    val v = k.groupValues[2]
+                    when (k.groupValues[1]) {
+                        "plug" -> histPlugged = v != "none"
+                        "temp" -> v.toIntOrNull()?.let { histTemp = it / 10f }
+                        "volt" -> v.toIntOrNull()?.let { histVolt = it }
+                        "charge" -> v.toIntOrNull()?.let { histCharge = it }
+                    }
+                }
+                hist.add(Triple(t, level, histPlugged))
+                val base = timeBase
+                if (base != null && base + t > MIN_VALID_TIME) {
+                    val abs = base + t
+                    val prev = r.history.lastOrNull()
+                    if (prev == null || prev.level != level || prev.plugged != histPlugged ||
+                        prev.screenOn != histScreenOn || abs - prev.t >= 5 * 60_000) {
+                        if (prev == null || abs >= prev.t) {
+                            r.history.add(LogEntry(abs, level, histPlugged, histTemp, histVolt, histCharge, histScreenOn))
+                        }
+                    }
+                }
             }
         }
     }
@@ -160,6 +196,9 @@ class BugreportParser {
     }
 
     companion object {
+        /** Ignore timestamps before 2015 (clock not set yet after a reset). */
+        private const val MIN_VALID_TIME = 1_420_070_400_000L
+
         /** Parses a .zip bug report (finds the main bugreport-*.txt inside) or a plain text file. */
         fun parse(input: InputStream, isZip: Boolean, onProgress: (Long) -> Unit = {}): Result {
             val p = BugreportParser()

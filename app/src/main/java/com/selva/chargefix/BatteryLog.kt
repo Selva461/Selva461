@@ -20,6 +20,8 @@ data class LogEntry(
     val voltageMv: Int,
     /** Charge left in the battery, mAh (from the charge counter), or -1. */
     val chargeMah: Int,
+    /** Screen on? null = unknown (older readings). */
+    val screenOn: Boolean? = null,
 )
 
 /**
@@ -43,7 +45,8 @@ object BatteryLog {
         val temp = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10f
         val volt = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
         val f = File(ctx.filesDir, FILE)
-        val line = "${System.currentTimeMillis()},$level,${if (plugged) 1 else 0},$temp,$volt,${chargeMah(ctx)}\n"
+        val screen = if (ctx.getSystemService(android.os.PowerManager::class.java).isInteractive) 1 else 0
+        val line = "${System.currentTimeMillis()},$level,${if (plugged) 1 else 0},$temp,$volt,${chargeMah(ctx)},$screen\n"
         f.appendText(line)
         if (f.length() > 600_000) prune(f)
     }
@@ -67,8 +70,33 @@ object BatteryLog {
             val t = p[0].toLongOrNull() ?: return@mapNotNull null
             if (t < sinceMs) return@mapNotNull null
             LogEntry(t, p[1].toIntOrNull() ?: return@mapNotNull null, p[2] == "1",
-                p[3].toFloatOrNull() ?: 0f, p[4].toIntOrNull() ?: 0, p[5].toIntOrNull() ?: -1)
+                p[3].toFloatOrNull() ?: 0f, p[4].toIntOrNull() ?: 0, p[5].toIntOrNull() ?: -1,
+                p.getOrNull(6)?.let { s -> if (s == "1") true else if (s == "0") false else null })
         }
+    }
+
+    /**
+     * Merges past readings (e.g. from Android's battery history) into the log. Only fills gaps:
+     * anything within 7 minutes of an existing reading is skipped. Returns how many were added.
+     */
+    @Synchronized
+    fun importEntries(ctx: Context, entries: List<LogEntry>): Int {
+        if (entries.isEmpty()) return 0
+        val cutoff = System.currentTimeMillis() - KEEP_MS
+        val existing = load(ctx)
+        val times = existing.map { it.t }.sorted()
+        fun near(t: Long): Boolean {
+            val i = times.binarySearch(t).let { if (it < 0) -it - 1 else it }
+            return (i < times.size && times[i] - t < 7 * 60_000) || (i > 0 && t - times[i - 1] < 7 * 60_000)
+        }
+        val add = entries.filter { it.t in cutoff..System.currentTimeMillis() && !near(it.t) }
+        if (add.isEmpty()) return 0
+        val all = (existing + add).sortedBy { it.t }
+        File(ctx.filesDir, FILE).writeText(all.joinToString("") { e ->
+            "${e.t},${e.level},${if (e.plugged) 1 else 0},${e.tempC},${e.voltageMv},${e.chargeMah}," +
+                "${when (e.screenOn) { true -> "1"; false -> "0"; null -> "-" }}\n"
+        })
+        return add.size
     }
 
     private fun prune(f: File) {

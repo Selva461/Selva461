@@ -6,7 +6,9 @@ import android.content.Context
 object HealthStore {
     fun prefs(c: Context) = c.getSharedPreferences("health_last", Context.MODE_PRIVATE)
 
-    fun save(c: Context, r: BugreportParser.Result, source: String) {
+    /** Saves the summary and back-fills past readings into the battery log. Returns readings added. */
+    fun save(c: Context, r: BugreportParser.Result, source: String): Int {
+        val added = runCatching { BatteryLog.importEntries(c, r.history) }.getOrDefault(0)
         val e = prefs(c).edit().clear()
         fun put(k: String, v: Int?) { if (v != null) e.putInt(k, v) }
         put("cycles", r.cycleCount); put("full", r.fullChargeMah); put("design", r.designMah)
@@ -17,7 +19,9 @@ object HealthStore {
         e.putString("designSrc", r.designSource); e.putString("health", r.healthText)
         e.putString("model", r.model); e.putString("source", source)
         e.putString("ids", r.ids.entries.joinToString("\n") { "${it.key}: ${it.value}" })
+        e.putInt("imported", added)
         e.putLong("at", System.currentTimeMillis()).apply()
+        return added
     }
 
     /** Reads the phone's battery records over the app's own debug connection. Blocking. */

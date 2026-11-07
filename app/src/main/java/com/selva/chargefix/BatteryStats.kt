@@ -189,7 +189,24 @@ object BatteryStats {
         return if (est.size >= 3) est.sorted()[est.size / 2].roundToInt() else null
     }
 
-        /** How many times the battery reached ~100% while charging since a time. */
+        /** Drain (% per hour) with the screen on vs off, plus screen-on hours, over a period. */
+    data class ScreenSplit(val onRate: Double?, val offRate: Double?, val onHours: Double)
+
+    fun screenSplit(ctx: Context, from: Long): ScreenSplit {
+        val log = BatteryLog.load(ctx, from)
+        var onDrop = 0.0; var onMs = 0L; var offDrop = 0.0; var offMs = 0L
+        for (k in 1 until log.size) {
+            val a = log[k - 1]; val b = log[k]
+            val dt = b.t - a.t
+            if (a.plugged || b.plugged || dt <= 0 || dt > 45 * 60_000 || a.screenOn == null) continue
+            val drop = (a.level - b.level).coerceAtLeast(0).toDouble()
+            if (a.screenOn) { onDrop += drop; onMs += dt } else { offDrop += drop; offMs += dt }
+        }
+        fun rate(d: Double, ms: Long) = if (ms >= 2 * 3_600_000L) d / (ms / 3_600_000.0) else null
+        return ScreenSplit(rate(onDrop, onMs), rate(offDrop, offMs), onMs / 3_600_000.0)
+    }
+
+    /** How many times the battery reached ~100% while charging since a time. */
     fun fullChargesSince(ctx: Context, from: Long): Int {
         var n = 0; var armed = true
         BatteryLog.load(ctx, from).forEach { e ->

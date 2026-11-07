@@ -65,8 +65,8 @@ class HealthActivity : AppCompatActivity() {
         tvStatus.text = "Reading battery records…"
         io.execute {
             val msg = try {
-                HealthStore.scan(this)
-                "Scanned ✓"
+                val n = HealthStore.prefs(this).let { HealthStore.scan(this); it.getInt("imported", 0) }
+                "Scanned ✓" + if (n > 0) " Added $n past readings to your history." else ""
             } catch (e: Exception) {
                 "Scan failed: ${e.message ?: e}"
             }
@@ -86,7 +86,12 @@ class HealthActivity : AppCompatActivity() {
                     BugreportParser.parse(input, isZip) { n -> ui.post { tvStatus.text = "Reading $name… ${n / 1000}k lines" } }
                 }
                 if (r.linesRead < 100) "That doesn't look like a bug report." else {
-                    save(r, "bug report"); "Read ${r.linesRead / 1000}k lines from $name ✓"
+                    val added = save(r, "bug report")
+                    val span = r.history.takeIf { it.isNotEmpty() }?.let {
+                        val f = DateFormat.getDateInstance(DateFormat.MEDIUM)
+                        " (${f.format(Date(it.first().t))} – ${f.format(Date(it.last().t))})"
+                    } ?: ""
+                    "Read ${r.linesRead / 1000}k lines from $name ✓\nAdded $added past battery readings to your history$span."
                 }
             } catch (e: Exception) {
                 "Couldn't read it: ${e.message ?: e}"
@@ -97,7 +102,7 @@ class HealthActivity : AppCompatActivity() {
 
     private fun prefs() = HealthStore.prefs(this)
 
-    private fun save(r: BugreportParser.Result, source: String) = HealthStore.save(this, r, source)
+    private fun save(r: BugreportParser.Result, source: String): Int = HealthStore.save(this, r, source)
 
     // ------------------------------------------------------------------ screen
 
@@ -214,6 +219,14 @@ class HealthActivity : AppCompatActivity() {
             val n = nightDrop / (nightMs / 3_600_000.0)
             lines += "• Overnight (phone idle) it drops ${"%.1f".format(n)}% per hour" +
                 if (n > 2.5) " - that's high; an app is probably keeping the phone awake." else " - that's normal."
+        }
+        val split = BatteryStats.screenSplit(this, System.currentTimeMillis() - 7L * 86_400_000)
+        if (split.onRate != null || split.offRate != null) {
+            lines += "• Screen on: " + (split.onRate?.let { "%.1f%% per hour".format(it) } ?: "not enough data") +
+                " · Screen off: " + (split.offRate?.let { "%.1f%% per hour".format(it) } ?: "not enough data") + "." +
+                (split.offRate?.let { if (it > 2.5) " Screen-off drain is high - an app keeps the phone awake." else "" } ?: "")
+            if (split.onHours > 0) lines += "• Screen-on time: about ${"%.1f".format(split.onHours / ((System.currentTimeMillis() -
+                (BatteryLog.load(this, System.currentTimeMillis() - 7L * 86_400_000).firstOrNull()?.t ?: System.currentTimeMillis())) / 86_400_000.0).coerceAtLeast(1.0))} hours a day."
         }
         lines += "• You plug in about ${"%.1f".format(plugIns / spanDays)} times a day."
         live.chargePctPerMin?.let { lines += "• Charging speed: about ${"%.1f".format(it)}% per minute (0 → 100% in ~${(100 / it).roundToInt()} min)." +

@@ -124,6 +124,9 @@ object AutoAnalyzer {
             r.drainPctPerHour?.let { append("\nDrains ${"%.1f".format(it)}%/hour → a full charge lasts ~${(100 / it).toInt()} h.") }
             health?.let { append("\nBattery health: $it%" + if (it < 80) " - replacement worth it." else ".") }
             HealthStore.prefs(c).takeIf { it.contains("cycles") }?.let { append("\nCharge cycles: ${it.getInt("cycles", 0)}.") }
+            val sp = BatteryStats.screenSplit(c, System.currentTimeMillis() - 86_400_000L)
+            sp.onRate?.let { append("\nScreen on: ${"%.1f".format(it)}%/h") }
+            sp.offRate?.let { append(if (sp.onRate != null) " · " else "\n"); append("screen off: ${"%.1f".format(it)}%/h") }
             if (r.fakeFixes > 0) append("\nFake-charging fixes so far: ${r.fakeFixes}.")
         }
         post(c, CH_REPORT, ID_DAILY, title, body)
