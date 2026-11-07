@@ -55,6 +55,15 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         card = findViewById(R.id.cardVerdict)
+        // Long-press: show everything the phone reports about charging (e.g. a SUPERVOOC flag).
+        card.setOnLongClickListener {
+            val i = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val extras = i?.extras
+            tvLog.text = "Phone battery info:\n" + (extras?.keySet()?.sorted()?.joinToString("\n") { k ->
+                @Suppress("DEPRECATION") "$k = ${extras.get(k)}"
+            } ?: "none")
+            true
+        }
         tvVerdict = findViewById(R.id.tvVerdict)
         tvVerdictDetail = findViewById(R.id.tvVerdictDetail)
         tvDetails = findViewById(R.id.tvDetails)
@@ -153,12 +162,14 @@ class MainActivity : AppCompatActivity() {
                 "Bolt is showing, but the battery is draining. Press \"Fix charging now\".",
                 0xFFCF222E.toInt())
             Verdict.UNKNOWN -> Triple("Can't tell", "This phone doesn't report charging current.", 0xFF9A6700.toInt())
+            Verdict.CHECKING -> Triple("Checking…", "Learning how your phone reports current. Keep this open ~20 s.", 0xFF9A6700.toInt())
         }
         card.setCardBackgroundColor(color)
         tvVerdict.setTextColor(Color.WHITE); tvVerdictDetail.setTextColor(Color.WHITE); tvDetails.setTextColor(Color.WHITE)
         tvVerdict.text = title
         tvVerdictDetail.text = detail
-        val cur = s.netCurrentMa?.let { "${if (it > 0) "+" else ""}$it mA" } ?: "not reported"
+        val cur = s.netCurrentMa?.let { "${if (it > 0) "+" else ""}$it mA" }
+            ?: s.rawCurrentMa?.let { "$it mA (learning direction…)" } ?: "not reported"
         tvDetails.text = buildString {
             appendLine("Battery : ${s.level}%")
             appendLine("Source  : ${s.pluggedLabel}")

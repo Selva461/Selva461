@@ -37,9 +37,18 @@ object Fixer {
         val log = StringBuilder()
         fun say(s: String) { log.appendLine(s); progress(log.toString().trim()) }
 
-        val before = BatteryReader.read(ctx)
+        var before = BatteryReader.read(ctx)
+        // First learn which way this phone's current sensor counts (up to ~30 s).
+        if (BatteryReader.verdict(before) == Verdict.CHECKING) {
+            say("Checking whether it's really charging…")
+            repeat(15) {
+                if (BatteryReader.verdict(before) != Verdict.CHECKING) return@repeat
+                Thread.sleep(2000)
+                before = BatteryReader.read(ctx)
+            }
+        }
         if (!before.isPlugged) { say("Not plugged in."); return Outcome(false, null, log.toString()) }
-        if (BatteryReader.verdict(before) == Verdict.CHARGING_OK) {
+        if (BatteryReader.verdict(before).let { it == Verdict.CHARGING_OK || it == Verdict.FULL }) {
             say("It's already really charging (${before.netCurrentMa} mA). Nothing to fix.")
             return Outcome(true, null, log.toString())
         }

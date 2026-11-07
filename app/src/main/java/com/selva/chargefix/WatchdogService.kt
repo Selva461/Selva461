@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -36,6 +38,39 @@ class WatchdogService : Service() {
     private var fixAttemptsThisPlug = 0
     private var lastFixAt = 0L
     private var alerted = false
+    private var ticking = false
+    private var plugInAt = 0L
+    private var goodSince = 0L
+    private var doneThisPlug = false
+
+    /** Wakes the watchdog only when a charger is connected; otherwise it sleeps (no polling). */
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            handler.post {
+                if (i.action == Intent.ACTION_POWER_CONNECTED) startTicking() else {
+                    resetPlug(); stopTicking()
+                    getSystemService(NotificationManager::class.java)
+                        .notify(ID_STATUS, statusNotification("Sleeping - wakes up when you plug in"))
+                }
+            }
+        }
+    }
+
+    private fun startTicking() {
+        if (ticking) return
+        ticking = true
+        handler.post(tick)
+    }
+
+    private fun stopTicking() {
+        ticking = false
+        handler.removeCallbacks(tick)
+    }
+
+    private fun resetPlug() {
+        wasPlugged = false; badSamples = 0; fixAttemptsThisPlug = 0; alerted = false
+        levelAtPlugIn = -1; goodSince = 0L; doneThisPlug = false
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,6 +102,10 @@ class WatchdogService : Service() {
                 wifiCallback)
         }
         handler.postDelayed({ armIfNeeded() }, 10_000)
+        registerReceiver(powerReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,13 +121,14 @@ class WatchdogService : Service() {
             startForeground(ID_STATUS, n)
         }
         if (intent?.action == ACTION_FIX_NOW) handler.post { doFix(manual = true) }
-        handler.removeCallbacks(tick)
-        handler.post(tick)
+        // Check now (in case it's already plugged in); after that only plug-in wakes it.
+        stopTicking(); startTicking()
         return START_STICKY
     }
 
     override fun onDestroy() {
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(wifiCallback) }
+        runCatching { unregisterReceiver(powerReceiver) }
         handler.removeCallbacksAndMessages(null)
         thread.quitSafely()
         super.onDestroy()
@@ -96,8 +136,9 @@ class WatchdogService : Service() {
 
     private val tick = object : Runnable {
         override fun run() {
+            if (!ticking) return
             check()
-            handler.postDelayed(this, INTERVAL_MS)
+            if (ticking) handler.postDelayed(this, INTERVAL_MS)
         }
     }
 
@@ -106,16 +147,25 @@ class WatchdogService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
 
         if (!s.isPlugged) {
-            if (wasPlugged) nm.cancel(ID_ALERT)
-            wasPlugged = false; badSamples = 0; fixAttemptsThisPlug = 0; alerted = false; levelAtPlugIn = -1
-            nm.notify(ID_STATUS, statusNotification("Not plugged in · ${s.level}%"))
+            resetPlug(); stopTicking()
+            nm.notify(ID_STATUS, statusNotification("Sleeping - wakes up when you plug in"))
             return
         }
         if (!wasPlugged) {
-            wasPlugged = true; levelAtPlugIn = s.level
+            wasPlugged = true; levelAtPlugIn = s.level; plugInAt = System.currentTimeMillis()
+        }
+        // Give up watching after 10 min on the charger (no endless polling).
+        if (System.currentTimeMillis() - plugInAt > MAX_WATCH_MS) {
+            stopTicking()
+            nm.notify(ID_STATUS, statusNotification("Charging checked · sleeping until next plug-in"))
+            return
         }
 
         val verdict = BatteryReader.verdict(s)
+        if (verdict == Verdict.CHECKING) {
+            nm.notify(ID_STATUS, statusNotification("Checking charging… ${s.level}%"))
+            return
+        }
         // A dropping battery level while plugged in is proof, whatever the current sensor says.
         val levelDropped = levelAtPlugIn >= 0 && s.level < levelAtPlugIn
         val bad = verdict == Verdict.FAKE_CHARGING || levelDropped
@@ -125,9 +175,17 @@ class WatchdogService : Service() {
         if (!bad) {
             if (alerted) nm.cancel(ID_ALERT)
             alerted = false
-            nm.notify(ID_STATUS, statusNotification("Really charging · ${s.level}% · $cur"))
+            if (goodSince == 0L) goodSince = System.currentTimeMillis()
+            // Really charging for a full minute (and the level isn't falling) -> done until next plug-in.
+            if (System.currentTimeMillis() - goodSince >= 60_000) {
+                stopTicking()
+                nm.notify(ID_STATUS, statusNotification("Really charging ✓ ${s.level}% · sleeping until next plug-in"))
+            } else {
+                nm.notify(ID_STATUS, statusNotification("Really charging · ${s.level}% · $cur"))
+            }
             return
         }
+        goodSince = 0L
         nm.notify(ID_STATUS, statusNotification("NOT really charging · ${s.level}% · $cur"))
 
         if (badSamples >= BAD_SAMPLES_TO_ACT || levelDropped) {
@@ -201,8 +259,9 @@ class WatchdogService : Service() {
         private const val CH_ALERT = "alert"
         private const val ID_STATUS = 1
         private const val ID_ALERT = 2
-        private const val INTERVAL_MS = 10_000L
-        private const val BAD_SAMPLES_TO_ACT = 3 // ~30 seconds
+        private const val INTERVAL_MS = 5_000L
+        private const val MAX_WATCH_MS = 10 * 60_000L
+        private const val BAD_SAMPLES_TO_ACT = 6 // ~30 seconds
         private const val MAX_AUTO_FIXES = 3
         private const val FIX_COOLDOWN_MS = 2 * 60_000L
 

@@ -55,6 +55,8 @@ object AdbShell {
 
         init {
             setApi(Build.VERSION.SDK_INT)
+            // Never hang forever waiting on adbd.
+            setTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             if (keyFile.exists() && certFile.exists()) {
                 key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
                 cert = CertificateFactory.getInstance("X.509").generateCertificate(certFile.inputStream())
@@ -137,6 +139,14 @@ object AdbShell {
 
     // ---------------------------------------------------------------- sessions
 
+    /** Retries the one-time permission grant (it fails on OnePlus until
+     *  "Disable permission monitoring" is turned on in Developer options). */
+    private fun grantIfMissing(ctx: Context, m: Manager) {
+        if (!canToggleWirelessDebugging(ctx)) {
+            runCatching { run(m, "pm grant ${ctx.packageName} android.permission.WRITE_SECURE_SETTINGS") }
+        }
+    }
+
     class Session internal constructor(private val ctx: Context, private val m: Manager) {
         fun run(cmd: String): String = run(m, cmd)
         /** Runs a USB operation in a helper process with shell rights. */
@@ -159,6 +169,7 @@ object AdbShell {
         // 1) Local ADB - no Wi-Fi needed (works until restart once armed).
         if (connectLocal(m0)) {
             try {
+                grantIfMissing(ctx, m0)
                 return block(Session(ctx, m0))
             } finally {
                 runCatching { m0.disconnect() }
@@ -172,7 +183,8 @@ object AdbShell {
         var turnedOn = false
         if (!wasOn) {
             if (!canToggleWirelessDebugging(ctx)) {
-                throw NotReady("Turn on Wireless debugging (Developer options), then try again.")
+                throw NotReady("Turn on Wireless debugging (Developer options), then try again. " +
+                    "Tip: turn ON \"Disable permission monitoring\" in Developer options so the app can do this itself.")
             }
             if (!setWirelessDebugging(ctx, true)) throw NotReady("Couldn't turn on Wireless debugging.")
             turnedOn = true
@@ -180,6 +192,7 @@ object AdbShell {
         val m = mgr(ctx)
         try {
             connect(ctx, m)
+            grantIfMissing(ctx, m)
             val result = block(Session(ctx, m))
             armLocal(ctx, m)
             return result
