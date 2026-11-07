@@ -56,6 +56,48 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- No-root mode -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardCornerRadius="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="No-root mode (Shizuku)"
+                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                <TextView
+                    android:id="@+id/tvShizuku"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnShizuku"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnUsbInfo"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Show USB port info" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- Fix controls -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
@@ -88,7 +130,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="64dp"
                     android:layout_marginTop="12dp"
-                    android:text="Reset charging (fix it)"
+                    android:text="Fix charging now"
                     android:textSize="18sp"
                     app:icon="@drawable/ic_bolt" />
 
@@ -162,7 +204,7 @@
                     android:id="@+id/swAutoFix"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Auto-fix it for me (root)" />
+                    android:text="Auto-fix it for me" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -19,13 +19,13 @@ class FixTileService : TileService() {
         val tile = qsTile ?: return
         tile.state = Tile.STATE_ACTIVE; tile.label = "Resetting…"; tile.updateTile()
         Thread {
-            val r = ChargeControl.resetCharging()
+            val r = Fixer.fix(this, ChargeControl.hasRoot())
             mainExecutor.execute {
                 tile.state = Tile.STATE_INACTIVE; tile.label = "Fix charging"; tile.updateTile()
-                if (r.ok) {
-                    Toast.makeText(this, "Charger reset done", Toast.LENGTH_SHORT).show()
+                if (r.fixed) {
+                    Toast.makeText(this, "Really charging now", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(this, "Needs root - opening app", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Couldn't fix it - opening app", Toast.LENGTH_LONG).show()
                     openApp()
                 }
             }

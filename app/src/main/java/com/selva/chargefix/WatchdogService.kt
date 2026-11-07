@@ -120,20 +120,20 @@ class WatchdogService : Service() {
         if (!manual) fixAttemptsThisPlug++
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(ID_STATUS, statusNotification("Resetting charger…"))
-        val r = ChargeControl.resetCharging()
+        val r = Fixer.fix(this, ChargeControl.hasRoot())
         badSamples = 0
         levelAtPlugIn = BatteryReader.read(this).level
-        val text = if (r.ok) "Charger reset done. Checking again…"
-        else "Couldn't reset: ${r.output.take(120)}. Unplug & replug or restart the phone."
+        val text = if (r.fixed) "Really charging again${r.method?.let { " (${it.label})" } ?: ""}."
+        else "Couldn't fix it automatically. Unplug, restart the phone, plug in again."
         nm.notify(ID_ALERT, NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(R.drawable.ic_bolt)
-            .setContentTitle(if (r.ok) "Charger reset" else "Charger reset failed")
+            .setContentTitle(if (r.fixed) "Charging fixed" else "Charging fix failed")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(openAppIntent(this))
             .setAutoCancel(true)
             .build())
-        alerted = !r.ok
+        alerted = !r.fixed
     }
 
     private fun statusNotification(text: String): Notification =
@@ -151,7 +151,7 @@ class WatchdogService : Service() {
 
     private fun alertNotification(cur: String, level: Int): Notification {
         val text = "The phone says it's charging, but the battery is draining ($cur, $level%). " +
-            "Tap \"Fix now\" (needs root), or unplug and restart the phone."
+            "Tap \"Fix now\", or unplug and restart the phone."
         return NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(R.drawable.ic_bolt)
             .setContentTitle("Fake charging detected!")
