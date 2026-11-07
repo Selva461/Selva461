@@ -30,11 +30,19 @@ import java.util.Date
  * it can connect to itself, run the USB-port commands, and disconnect.
  *
  * During the first connection it grants itself WRITE_SECURE_SETTINGS, which lets it
- * switch Wireless debugging ON only for the few seconds a fix takes and OFF again.
+ * switch Wireless debugging ON only for the few seconds it needs and OFF again.
+ *
+ * No-Wi-Fi trick: whenever it is connected, it also "arms" local ADB (adb tcpip 5555).
+ * That keeps working over the phone's internal loopback - mobile data or offline -
+ * until the next restart. After a restart it re-arms automatically the first time
+ * the phone is on any Wi-Fi.
  */
 object AdbShell {
 
     private const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
+    private const val ADB_ENABLED = "adb_enabled"
+    /** Local ADB port: once armed it works with NO Wi-Fi until the phone restarts. */
+    private const val LOCAL_PORT = 5555
     private const val PREFS = "adb"
 
     // ---------------------------------------------------------------- keys / identity
@@ -117,8 +125,11 @@ object AdbShell {
             val pkg = ctx.packageName
             run(m, "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
             val granted = canToggleWirelessDebugging(ctx)
+            val armed = armLocal(ctx, m)
             runCatching { m.disconnect() }
-            "Paired ✓" + if (granted) " - Charge Fix can now switch Wireless debugging on and off by itself." else ""
+            "Paired ✓" +
+                (if (granted) " Charge Fix can switch Wireless debugging on/off by itself." else "") +
+                (if (armed) " Fixing now also works on mobile data until the next restart." else "")
         } catch (e: Exception) {
             "Paired ✓ (couldn't finish setup: ${e.message}). Tap Test connection while Wireless debugging is on."
         }
@@ -144,7 +155,19 @@ object AdbShell {
     @Synchronized
     fun <T> session(ctx: Context, block: (Session) -> T): T {
         if (!isPaired(ctx)) throw NotReady("Not set up yet. Tap \"Set up no-root mode\" first.")
-        if (!onWifi(ctx)) throw NotReady("Connect to Wi-Fi first - Android's Wireless debugging only works on Wi-Fi.")
+        val m0 = mgr(ctx)
+        // 1) Local ADB - no Wi-Fi needed (works until restart once armed).
+        if (connectLocal(m0)) {
+            try {
+                return block(Session(ctx, m0))
+            } finally {
+                runCatching { m0.disconnect() }
+            }
+        }
+        // 2) Wireless debugging - needs Wi-Fi; re-arms local ADB for later.
+        if (!onWifi(ctx)) throw NotReady(
+            "No Wi-Fi and the no-Wi-Fi mode isn't active (the phone was restarted since it was last on Wi-Fi). " +
+                "Join any Wi-Fi once and it re-arms by itself - or unplug, restart and plug in.")
         val wasOn = wirelessDebuggingOn(ctx)
         var turnedOn = false
         if (!wasOn) {
@@ -157,11 +180,61 @@ object AdbShell {
         val m = mgr(ctx)
         try {
             connect(ctx, m)
-            return block(Session(ctx, m))
+            val result = block(Session(ctx, m))
+            armLocal(ctx, m)
+            return result
         } finally {
             runCatching { m.disconnect() }
             if (turnedOn) setWirelessDebugging(ctx, false)
         }
+    }
+
+    /** True if local ADB (no Wi-Fi) is currently usable. */
+    @Synchronized
+    fun localReady(ctx: Context): Boolean {
+        if (!isPaired(ctx)) return false
+        val m = mgr(ctx)
+        val ok = connectLocal(m)
+        if (ok) runCatching { m.disconnect() }
+        return ok
+    }
+
+    /**
+     * Makes sure the no-Wi-Fi mode is armed for this boot. Silent; needs Wi-Fi only
+     * if it isn't armed yet. Returns a short status.
+     */
+    fun ensureArmed(ctx: Context): String {
+        if (!isPaired(ctx)) return "not set up"
+        if (localReady(ctx)) return "armed"
+        if (!onWifi(ctx) || !canToggleWirelessDebugging(ctx)) return "needs Wi-Fi"
+        return try {
+            session(ctx) { }
+            if (localReady(ctx)) "armed" else "couldn't arm"
+        } catch (e: Exception) {
+            "couldn't arm: ${e.message}"
+        }
+    }
+
+    private fun connectLocal(m: Manager): Boolean {
+        if (m.isConnected) return true
+        return try {
+            m.setThrowOnUnauthorised(true)
+            m.connect("127.0.0.1", LOCAL_PORT)
+        } catch (e: Throwable) {
+            runCatching { m.disconnect() }
+            false
+        }
+    }
+
+    /** adb tcpip 5555: adbd restarts listening locally; survives until reboot. */
+    private fun armLocal(ctx: Context, m: Manager): Boolean = try {
+        // Local ADB needs (USB) debugging enabled; it doesn't need a cable or Wi-Fi.
+        run(m, "settings put global $ADB_ENABLED 1")
+        runCatching { m.openStream("tcpip:$LOCAL_PORT").use { it.openInputStream().read() } }
+        runCatching { m.disconnect() }
+        true
+    } catch (e: Exception) {
+        false
     }
 
     private fun connect(ctx: Context, m: Manager) {

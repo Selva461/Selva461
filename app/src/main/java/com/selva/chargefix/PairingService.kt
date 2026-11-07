@@ -70,6 +70,9 @@ class PairingService : Service() {
                 "Pairing failed: ${e.message ?: e}"
             }
             if (AdbShell.isPaired(this)) {
+                // Hands-off from here: watch every charge and fix fake charging automatically.
+                Prefs.setAutoFix(this, true)
+                WatchdogService.start(this)
                 getSystemService(NotificationManager::class.java).notify(ID_DONE,
                     NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_bolt)
                         .setContentTitle("Charge Fix is set up")

@@ -8,6 +8,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -35,11 +39,34 @@ class WatchdogService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var lastArmTry = 0L
+
+    /** Re-arms the no-Wi-Fi mode the moment the phone joins any Wi-Fi after a restart. */
+    private val wifiCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            handler.postDelayed({ armIfNeeded() }, 5_000)
+        }
+    }
+
+    private fun armIfNeeded() {
+        if (!AdbShell.isPaired(this)) return
+        if (System.currentTimeMillis() - lastArmTry < 5 * 60_000L) return
+        lastArmTry = System.currentTimeMillis()
+        val st = AdbShell.ensureArmed(this)
+        if (st == "armed") lastArmTry = 0L // check again on the next Wi-Fi join
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannels(this)
         thread = HandlerThread("charge-watchdog").also { it.start() }
         handler = Handler(thread.looper)
+        runCatching {
+            getSystemService(ConnectivityManager::class.java).registerNetworkCallback(
+                NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
+                wifiCallback)
+        }
+        handler.postDelayed({ armIfNeeded() }, 10_000)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -61,6 +88,7 @@ class WatchdogService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(wifiCallback) }
         handler.removeCallbacksAndMessages(null)
         thread.quitSafely()
         super.onDestroy()
@@ -174,7 +202,7 @@ class WatchdogService : Service() {
         private const val ID_STATUS = 1
         private const val ID_ALERT = 2
         private const val INTERVAL_MS = 10_000L
-        private const val BAD_SAMPLES_TO_ACT = 6 // ~1 minute
+        private const val BAD_SAMPLES_TO_ACT = 3 // ~30 seconds
         private const val MAX_AUTO_FIXES = 3
         private const val FIX_COOLDOWN_MS = 2 * 60_000L
 

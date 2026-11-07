@@ -76,6 +76,14 @@ class MainActivity : AppCompatActivity() {
         btnReset.setOnClickListener { runFix() }
         btnAdbSetup.setOnClickListener { onSetupButton() }
         btnAdbTest.setOnClickListener { testAdb() }
+        findViewById<MaterialButton>(R.id.btnBattery).setOnClickListener {
+            runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    android.net.Uri.parse("package:$packageName")))
+            }.onFailure {
+                startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
         btnStop.setOnClickListener { runRoot("Turning charging OFF…") { ChargeControl.stopCharging() } }
         btnStart.setOnClickListener { runRoot("Turning charging ON…") { ChargeControl.startCharging() } }
         btnReboot.setOnClickListener {
@@ -116,6 +124,12 @@ class MainActivity : AppCompatActivity() {
             IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         ui.post(poll)
         updateAdb()
+        // Pairing may have switched these on in the background.
+        if (swWatchdog.isChecked != Prefs.watchdog(this)) swWatchdog.isChecked = Prefs.watchdog(this)
+        if (swAutoFix.isChecked != Prefs.autoFix(this)) swAutoFix.isChecked = Prefs.autoFix(this)
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        findViewById<MaterialButton>(R.id.btnBattery).visibility =
+            if (pm.isIgnoringBatteryOptimizations(packageName)) android.view.View.GONE else android.view.View.VISIBLE
     }
 
     override fun onPause() {
@@ -219,12 +233,18 @@ class MainActivity : AppCompatActivity() {
         tvAdb.text = when {
             !paired -> "Not set up. Charge Fix pairs with your phone's own Wireless debugging once " +
                 "(about 2 minutes). No other app needed."
-            toggle -> "✓ Ready. On Wi-Fi, \"Fix charging now\" switches Wireless debugging on for a few " +
-                "seconds, fixes, and switches it off again."
+            toggle -> "✓ Ready. Fake charging is watched and fixed automatically."
             else -> "✓ Paired. Turn on Wireless debugging before pressing Fix (the app couldn't get " +
                 "permission to switch it itself)."
         } + (working?.takeIf { it != Fixer.Method.ROOT }?.let { "\nWorked last time: ${it.label}" } ?: "")
         btnAdbSetup.text = if (paired) "Forget pairing" else "Set up no-root mode"
+        if (paired) io.execute {
+            val local = AdbShell.localReady(this)
+            ui.post {
+                tvAdb.append(if (local) "\n✓ Works on mobile data / no Wi-Fi right now (until the next restart)."
+                else "\n• Mobile-data mode not active yet: it switches on by itself the next time you're on any Wi-Fi.")
+            }
+        }
         btnAdbTest.visibility = if (paired) android.view.View.VISIBLE else android.view.View.GONE
     }
 
@@ -256,14 +276,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun testAdb() {
-        tvLog.text = "Connecting to Wireless debugging…"
+        tvLog.text = "Connecting…"
         io.execute {
             val out = try {
                 AdbShell.session(this) { sh ->
                     val id = sh.run("id")
                     val usb = sh.usbOp(UsbOps.OP_INFO, 0)
                     (if (id.contains("uid=2000")) "✓ Works - shell access OK\n" else "$id\n") + usb
-                }
+                } + "\n" + (if (AdbShell.localReady(this)) "✓ Mobile-data mode active (until restart)."
+                    else "✗ Mobile-data mode didn't switch on.")
             } catch (e: Exception) {
                 "✗ ${e.message ?: e}"
             }

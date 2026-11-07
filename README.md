@@ -27,6 +27,12 @@ phone's Wireless debugging once. During that first connection it grants itself
 to itself, starts a short-lived helper (`app_process`, as the shell user) that runs the
 USB command, then disconnects and switches Wireless debugging **off** again.
 
+**No Wi-Fi / mobile data:** whenever it is connected, the app also arms local ADB
+(`adb tcpip 5555`), which keeps working over the phone's internal loopback with no Wi-Fi
+until the next restart. After a restart the watchdog (started on boot) re-arms it silently
+the first time the phone joins any Wi-Fi. Note: while armed, port 5555 is also reachable
+from the same Wi-Fi network; any new computer still has to be approved on the phone.
+
 Whether the port commands make the charger renegotiate depends on the phone's USB
 driver, which is why the app checks each one by measuring the current.
 
