@@ -37,6 +37,19 @@ class BugreportParserTest {
         assertEquals(10.0, r.drainPctPerHour!!, 0.01)
     }
 
+    @Test
+    fun capturesBatteryIdentityFromScan() {
+        val r = BugreportParser.parseText("""
+            /sys/class/oplus_chg/battery/battery_sn=4G21A0123
+            /sys/class/oplus_chg/battery/battery_manu_date=2021-03-08
+            /sys/class/power_supply/battery/capacity=66
+            /sys/class/power_supply/usb/serial_number=IGNORED
+        """.trimIndent())
+        assertEquals("4G21A0123", r.ids["battery_sn"])
+        assertEquals("2021-03-08", r.ids["battery_manu_date"])
+        assertTrue("capacity" !in r.ids && r.ids.size == 2)
+    }
+
     /** Runs against a real report when BUGREPORT points at one (not committed). */
     @Test
     fun realReportIfProvided() {

@@ -32,6 +32,8 @@ class BugreportParser {
         var drainPctPerHour: Double? = null,
         var screenOffDrainPctPerHour: Double? = null,
         var linesRead: Long = 0,
+        /** Battery identity facts (serial, manufacture date, type...) if the phone exposes them. */
+        val ids: MutableMap<String, String> = linkedMapOf(),
     )
 
     private val r = Result()
@@ -59,8 +61,17 @@ class BugreportParser {
     private var histScreenOn = false
     private var histPlugged = false
 
+    private val idName = Regex("""(?i)(sn|serial|manu|date|type|vendor|auth|_id|batt_id|model)""")
+
     fun feed(line: String) {
         r.linesRead++
+        // "path=value" lines from our own scan of the battery folders
+        if (line.startsWith("/sys/class/") && line.contains('=') &&
+            (line.contains("/battery/") || line.contains("/bms/"))) {
+            val key = line.substringBefore('=').substringAfterLast('/')
+            val v = line.substringAfter('=').trim()
+            if (v.isNotEmpty() && v.length <= 64 && idName.containsMatchIn(key) && r.ids.size < 12) r.ids[key] = v
+        }
         if (line.contains("healthd") && line.contains("battery l=")) {
             healthd.find(line)?.let { m ->
                 m.groupValues[2].toIntOrNull()?.let { r.voltageMv = it }

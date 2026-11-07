@@ -36,6 +36,12 @@ class HealthActivity : AppCompatActivity() {
         setContentView(R.layout.activity_health)
         tvStatus = findViewById(R.id.tvStatus)
         findViewById<MaterialButton>(R.id.btnScan).setOnClickListener { scanPhone() }
+        findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.rangeGroup)
+            .addOnButtonCheckedListener { _, _, checked -> if (checked) renderCharts() }
+        findViewById<MaterialButton>(R.id.btnBefore).setOnClickListener { saveBefore() }
+        findViewById<MaterialButton>(R.id.btnAfter).setOnClickListener {
+            scanPhone { renderReplace(checkNow = true) }
+        }
         findViewById<MaterialButton>(R.id.btnBugreport).setOnClickListener {
             pickReport.launch(arrayOf("application/zip", "application/x-zip-compressed", "text/plain", "application/octet-stream"))
         }
@@ -47,16 +53,20 @@ class HealthActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ data sources
 
-    private fun scanPhone() {
+    private fun scanPhone(then: () -> Unit = {}) {
         if (!AdbShell.isPaired(this)) {
             tvStatus.text = "Scan needs no-root mode set up (main screen → Set up no-root mode). Or open a bug report instead."
+            then()
             return
         }
         tvStatus.text = "Reading battery records…"
         io.execute {
             val msg = try {
                 val text = AdbShell.session(this) { sh ->
-                    val nodes = BatteryStats.NODES.joinToString("; ") { "[ -r $it ] && echo \"$it=\$(cat $it)\"" }
+                    val nodes = BatteryStats.NODES.joinToString("; ") { "[ -r $it ] && echo \"$it=\$(cat $it)\"" } +
+                        // Every small readable file in the battery folders (finds IDs, serials, extra counters).
+                        "; for f in /sys/class/oplus_chg/battery/* /sys/class/power_supply/battery/*; do " +
+                        "[ -f \$f ] && [ -r \$f ] && v=\$(timeout 1 head -c 64 \$f 2>/dev/null | tr '\\n' ' ') && echo \"\$f=\$v\"; done"
                     sh.run("getprop | grep -E 'ro.product.model|ro.build.version.release'; dumpsys battery; " +
                         "logcat -d -b all 2>/dev/null | grep -iE 'healthd|cyclecount|battery_cc|battery_fcc|battery_soh' | tail -n 300; " +
                         "$nodes; dumpsys batterystats 2>/dev/null; true")
@@ -66,7 +76,7 @@ class HealthActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 "Scan failed: ${e.message ?: e}"
             }
-            ui.post { tvStatus.text = msg; render() }
+            ui.post { tvStatus.text = msg; render(); then() }
         }
     }
 
@@ -104,6 +114,7 @@ class HealthActivity : AppCompatActivity() {
         e.putString("cycleSrc", r.cycleSource); e.putString("fullSrc", r.fullChargeSource)
         e.putString("designSrc", r.designSource); e.putString("health", r.healthText)
         e.putString("model", r.model); e.putString("source", source)
+        e.putString("ids", r.ids.entries.joinToString("\n") { "${it.key}: ${it.value}" })
         e.putLong("at", System.currentTimeMillis()).apply()
     }
 
@@ -165,6 +176,9 @@ class HealthActivity : AppCompatActivity() {
         }
 
         findViewById<TextView>(R.id.tvVerdict).text = verdict(health, cycles, drain)
+        renderCharts()
+        findViewById<TextView>(R.id.tvReport).text = analytics(live)
+        renderReplace(checkNow = false)
         if (p.contains("at") && tvStatus.text.isNullOrEmpty()) {
             tvStatus.text = "Last read from ${p.getString("source", "")}: " +
                 DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(p.getLong("at", 0)))
@@ -179,6 +193,114 @@ class HealthActivity : AppCompatActivity() {
         else -> "No. At $health% your battery is healthy." +
             (if ((drain ?: 0.0) > 8) " The fast drain is more likely from apps or screen brightness than the battery." else "")
     } + (cycles?.let { if (it > 800) " It has also done $it cycles, which is a lot." else "" } ?: "")
+
+    // ------------------------------------------------------------------ charts + report
+
+    private fun renderCharts() {
+        val now = System.currentTimeMillis()
+        val week = findViewById<MaterialButton>(R.id.btn7d).isChecked
+        val from = now - (if (week) 7L else 1L) * 86_400_000
+        findViewById<LevelChartView>(R.id.levelChart).setData(BatteryLog.load(this, from), from, now)
+        findViewById<DailyBarView>(R.id.dailyBars).setData(BatteryStats.report(this).dailyUse)
+    }
+
+    private fun analytics(live: StatsReport): String {
+        val log = BatteryLog.load(this, System.currentTimeMillis() - 7L * 86_400_000)
+        if (log.size < 8) return "The app is collecting data (one reading every 15 minutes). " +
+            "Come back in a few hours for a full report."
+        val days = live.dailyUse.map { it.second }.filter { it > 0 }
+        var plugIns = 0; var nightDrop = 0.0; var nightMs = 0L
+        val cal = java.util.Calendar.getInstance()
+        for (k in 1 until log.size) {
+            val a = log[k - 1]; val b = log[k]
+            if (!a.plugged && b.plugged) plugIns++
+            cal.timeInMillis = a.t
+            val night = cal.get(java.util.Calendar.HOUR_OF_DAY) in 1..5
+            if (night && !a.plugged && !b.plugged && b.t - a.t < 45 * 60_000) {
+                nightDrop += (a.level - b.level).coerceAtLeast(0); nightMs += b.t - a.t
+            }
+        }
+        val spanDays = ((log.last().t - log.first().t) / 86_400_000.0).coerceAtLeast(0.1)
+        val temps = log.map { it.tempC }.filter { it > 0 }
+        val lines = mutableListOf<String>()
+        if (days.isNotEmpty()) lines += "• You use about ${days.average().roundToInt()}% of your battery per day" +
+            " (busiest day: ${days.max()}%)."
+        live.drainPctPerHour?.let { lines += "• While unplugged it drops ${"%.1f".format(it)}% per hour, so a full charge lasts about ${(100 / it).roundToInt()} hours." }
+        if (nightMs > 2 * 3_600_000) {
+            val n = nightDrop / (nightMs / 3_600_000.0)
+            lines += "• Overnight (phone idle) it drops ${"%.1f".format(n)}% per hour" +
+                if (n > 2.5) " - that's high; an app is probably keeping the phone awake." else " - that's normal."
+        }
+        lines += "• You plug in about ${"%.1f".format(plugIns / spanDays)} times a day."
+        live.chargePctPerMin?.let { lines += "• Charging speed: about ${"%.1f".format(it)}% per minute (0 → 100% in ~${(100 / it).roundToInt()} min)." +
+            if (it < 0.6) " That's slow for SUPERVOOC - the cable or charger may not be fast-charging." else "" }
+        if (temps.isNotEmpty()) lines += "• Temperature: average ${"%.0f".format(temps.average())} °C, highest ${"%.0f".format(temps.max())} °C" +
+            if (temps.max() > 42) " - heat ages batteries; avoid gaming while charging." else "."
+        lines += "• Based on ${"%.1f".format(spanDays)} days of readings."
+        return lines.joinToString("\n")
+    }
+
+    // ------------------------------------------------------------------ replacement check
+
+    private fun beforePrefs() = getSharedPreferences("battery_before", Context.MODE_PRIVATE)
+
+    private fun saveBefore() {
+        val now = prefs()
+        if (!now.contains("at")) {
+            tvStatus.text = "Tap \"Scan phone now\" (or open a bug report) first, then save the snapshot."
+            return
+        }
+        val e = beforePrefs().edit().clear()
+        listOf("cycles", "full", "learned", "soh").forEach { k -> if (now.contains(k)) e.putInt(k, now.getInt(k, 0)) }
+        e.putString("ids", now.getString("ids", "")).putLong("at", System.currentTimeMillis()).apply()
+        tvStatus.text = "Saved ✓ After the new battery is fitted, tap \"Check new battery\"."
+        renderReplace(false)
+    }
+
+    private fun renderReplace(checkNow: Boolean) {
+        val b = beforePrefs(); val n = prefs()
+        val tv = findViewById<TextView>(R.id.tvReplace)
+        if (!b.contains("at")) {
+            tv.text = "Before the service centre: scan, then tap 1. After the new battery is fitted: tap 2. " +
+                "The app compares cycles, capacity and the battery's ID."
+            return
+        }
+        val when0 = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(b.getLong("at", 0)))
+        if (!checkNow) {
+            tv.text = "\"Before\" saved on $when0: " +
+                (if (b.contains("cycles")) "${b.getInt("cycles", 0)} cycles, " else "") +
+                (if (b.contains("full")) "${fmt(b.getInt("full", 0))} mAh" else "capacity unknown") +
+                ".\nAfter the replacement, tap 2."
+            return
+        }
+        val design = n.getInt("design", BatteryStats.report(this).designMah)
+        val out = mutableListOf<String>()
+        var good = 0; var bad = 0
+        if (b.contains("cycles") && n.contains("cycles")) {
+            val c0 = b.getInt("cycles", 0); val c1 = n.getInt("cycles", 0)
+            if (c1 <= 10 || c1 < c0 / 2) { good++; out += "✓ Charge cycles: $c0 → $c1 (reset - looks like a new battery)" }
+            else { bad++; out += "✗ Charge cycles: $c0 → $c1 (not reset - may be the old or a used battery)" }
+        } else out += "? Charge cycles: not reported by the phone"
+        val full = if (n.contains("full")) n.getInt("full", 0) else if (n.contains("learned")) n.getInt("learned", 0) else null
+        if (full != null) {
+            val pct = full * 100 / design
+            when {
+                pct >= 95 -> { good++; out += "✓ Capacity: ${fmt(full)} of ${fmt(design)} mAh ($pct%)" }
+                pct >= 85 -> out += "! Capacity: ${fmt(full)} mAh ($pct%). New batteries need 2–3 full charges to calibrate - check again in 3 days."
+                else -> { bad++; out += "✗ Capacity: only ${fmt(full)} mAh ($pct%) - too low for a new battery" }
+            }
+        } else out += "? Capacity: not reported yet - charge to 100% once and check again"
+        val id0 = b.getString("ids", "").orEmpty(); val id1 = n.getString("ids", "").orEmpty()
+        if (id0.isNotBlank() && id1.isNotBlank()) {
+            if (id0 != id1) { good++; out += "✓ Battery ID changed" } else { bad++; out += "✗ Battery ID is the same as before" }
+        } else out += "? Battery ID: the phone doesn't expose one"
+        out += when {
+            bad == 0 && good >= 2 -> "\nVerdict: ✓ The battery was replaced with a new one."
+            bad > 0 -> "\nVerdict: ✗ Something doesn't add up - ask the service centre before you leave."
+            else -> "\nVerdict: ? Not enough proof yet. Charge to 100%, use it a day, then tap 2 again."
+        }
+        tv.text = out.joinToString("\n")
+    }
 
     private data class Tile(val label: String, val value: String, val sub: String)
 
