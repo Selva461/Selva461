@@ -45,7 +45,10 @@ class HealthActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnBugreport).setOnClickListener {
             pickReport.launch(arrayOf("application/zip", "application/x-zip-compressed", "text/plain", "application/octet-stream"))
         }
-        BatteryLog.schedule(this)
+        AutoAnalyzer.schedule(this)
+        // Fully automatic now: no before/after buttons needed.
+        findViewById<MaterialButton>(R.id.btnBefore).visibility = android.view.View.GONE
+        findViewById<MaterialButton>(R.id.btnAfter).visibility = android.view.View.GONE
         render()
     }
 
@@ -62,16 +65,7 @@ class HealthActivity : AppCompatActivity() {
         tvStatus.text = "Reading battery records…"
         io.execute {
             val msg = try {
-                val text = AdbShell.session(this) { sh ->
-                    val nodes = BatteryStats.NODES.joinToString("; ") { "[ -r $it ] && echo \"$it=\$(cat $it)\"" } +
-                        // Every small readable file in the battery folders (finds IDs, serials, extra counters).
-                        "; for f in /sys/class/oplus_chg/battery/* /sys/class/power_supply/battery/*; do " +
-                        "[ -f \$f ] && [ -r \$f ] && v=\$(timeout 1 head -c 64 \$f 2>/dev/null | tr '\\n' ' ') && echo \"\$f=\$v\"; done"
-                    sh.run("getprop | grep -E 'ro.product.model|ro.build.version.release'; dumpsys battery; " +
-                        "logcat -d -b all 2>/dev/null | grep -iE 'healthd|cyclecount|battery_cc|battery_fcc|battery_soh' | tail -n 300; " +
-                        "$nodes; dumpsys batterystats 2>/dev/null; true")
-                }
-                save(BugreportParser.parseText(text), "phone scan")
+                HealthStore.scan(this)
                 "Scanned ✓"
             } catch (e: Exception) {
                 "Scan failed: ${e.message ?: e}"
@@ -101,22 +95,9 @@ class HealthActivity : AppCompatActivity() {
         }
     }
 
-    private fun prefs() = getSharedPreferences("health_last", Context.MODE_PRIVATE)
+    private fun prefs() = HealthStore.prefs(this)
 
-    /** Keeps only the summary numbers - the report itself is never stored. */
-    private fun save(r: BugreportParser.Result, source: String) {
-        val e = prefs().edit().clear()
-        fun put(k: String, v: Int?) { if (v != null) e.putInt(k, v) }
-        put("cycles", r.cycleCount); put("full", r.fullChargeMah); put("design", r.designMah)
-        put("learned", r.learnedMah); put("soh", r.sohPct); put("volt", r.voltageMv)
-        r.tempMaxC?.let { e.putFloat("temp", it.toFloat()) }
-        r.drainPctPerHour?.let { e.putFloat("drain", it.toFloat()) }
-        e.putString("cycleSrc", r.cycleSource); e.putString("fullSrc", r.fullChargeSource)
-        e.putString("designSrc", r.designSource); e.putString("health", r.healthText)
-        e.putString("model", r.model); e.putString("source", source)
-        e.putString("ids", r.ids.entries.joinToString("\n") { "${it.key}: ${it.value}" })
-        e.putLong("at", System.currentTimeMillis()).apply()
-    }
+    private fun save(r: BugreportParser.Result, source: String) = HealthStore.save(this, r, source)
 
     // ------------------------------------------------------------------ screen
 
@@ -178,7 +159,10 @@ class HealthActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvVerdict).text = verdict(health, cycles, drain)
         renderCharts()
         findViewById<TextView>(R.id.tvReport).text = analytics(live)
-        renderReplace(checkNow = false)
+        findViewById<TextView>(R.id.tvReplace).text = AutoAnalyzer.swapStatus(this)
+            ?: ("Automatic. A battery swap needs the phone switched off, so whenever the phone starts " +
+                "after being off for 20+ minutes, Charge Fix compares the battery before and after by itself " +
+                "and sends you the result as a notification. Nothing to tap.")
         if (p.contains("at") && tvStatus.text.isNullOrEmpty()) {
             tvStatus.text = "Last read from ${p.getString("source", "")}: " +
                 DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(p.getLong("at", 0)))

@@ -10,6 +10,8 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
         ) {
+            if (intent.action == Intent.ACTION_BOOT_COMPLETED) runCatching { AutoAnalyzer.onBoot(context) }
+            else runCatching { AutoAnalyzer.schedule(context) }
             if (Prefs.watchdog(context)) runCatching { WatchdogService.start(context) }
         }
     }

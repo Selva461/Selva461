@@ -88,7 +88,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnHealth).setOnClickListener {
             startActivity(Intent(this, HealthActivity::class.java))
         }
-        BatteryLog.schedule(this)
+        AutoAnalyzer.schedule(this)
+        askNotificationPermission() // results arrive as notifications
         findViewById<MaterialButton>(R.id.btnBattery).setOnClickListener {
             runCatching {
                 startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,

@@ -50,6 +50,11 @@
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <service
+            android:name=".AutoAnalyzer$Job"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
             android:name=".WatchdogService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

@@ -182,7 +182,14 @@ object BatteryStats {
         return if (ms >= 6 * 3_600_000L && drop > 0) drop / (ms / 3_600_000.0) else null
     }
 
-    /** How many times the battery reached ~100% while charging since a time. */
+    /** Capacity measured only from readings after a time (e.g. after a battery swap). */
+    fun capacitySince(ctx: Context, from: Long): Int? {
+        val est = BatteryLog.load(ctx, from).filter { it.chargeMah > 0 && it.level in 30..95 }
+            .map { it.chargeMah * 100.0 / it.level }.filter { it in 1000.0..8000.0 }
+        return if (est.size >= 3) est.sorted()[est.size / 2].roundToInt() else null
+    }
+
+        /** How many times the battery reached ~100% while charging since a time. */
     fun fullChargesSince(ctx: Context, from: Long): Int {
         var n = 0; var armed = true
         BatteryLog.load(ctx, from).forEach { e ->
