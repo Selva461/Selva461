@@ -170,6 +170,28 @@ object BatteryStats {
         )
     }
 
+    /** % per hour lost while unplugged between two times; null if under 6 hours of data. */
+    fun drainBetween(ctx: Context, from: Long, to: Long): Double? {
+        val log = BatteryLog.load(ctx, from).filter { it.t <= to }
+        var drop = 0.0; var ms = 0L
+        for (k in 1 until log.size) {
+            val a = log[k - 1]; val b = log[k]
+            if (a.plugged || b.plugged || b.t - a.t > 45 * 60_000) continue
+            drop += (a.level - b.level); ms += b.t - a.t
+        }
+        return if (ms >= 6 * 3_600_000L && drop > 0) drop / (ms / 3_600_000.0) else null
+    }
+
+    /** How many times the battery reached ~100% while charging since a time. */
+    fun fullChargesSince(ctx: Context, from: Long): Int {
+        var n = 0; var armed = true
+        BatteryLog.load(ctx, from).forEach { e ->
+            if (e.plugged && e.level >= 98 && armed) { n++; armed = false }
+            if (e.level < 90) armed = true
+        }
+        return n
+    }
+
     private fun usedBetween(all: List<LogEntry>, from: Long, to: Long): Int {
         var used = 0
         for (k in 1 until all.size) {

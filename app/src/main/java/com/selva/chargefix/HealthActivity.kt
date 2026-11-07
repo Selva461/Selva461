@@ -252,6 +252,7 @@ class HealthActivity : AppCompatActivity() {
         }
         val e = beforePrefs().edit().clear()
         listOf("cycles", "full", "learned", "soh").forEach { k -> if (now.contains(k)) e.putInt(k, now.getInt(k, 0)) }
+        BatteryStats.report(this).capacityMah?.let { e.putInt("liveCap", it) }
         e.putString("ids", now.getString("ids", "")).putLong("at", System.currentTimeMillis()).apply()
         tvStatus.text = "Saved ✓ After the new battery is fitted, tap \"Check new battery\"."
         renderReplace(false)
@@ -273,33 +274,26 @@ class HealthActivity : AppCompatActivity() {
                 ".\nAfter the replacement, tap 2."
             return
         }
-        val design = n.getInt("design", BatteryStats.report(this).designMah)
-        val out = mutableListOf<String>()
-        var good = 0; var bad = 0
-        if (b.contains("cycles") && n.contains("cycles")) {
-            val c0 = b.getInt("cycles", 0); val c1 = n.getInt("cycles", 0)
-            if (c1 <= 10 || c1 < c0 / 2) { good++; out += "✓ Charge cycles: $c0 → $c1 (reset - looks like a new battery)" }
-            else { bad++; out += "✗ Charge cycles: $c0 → $c1 (not reset - may be the old or a used battery)" }
-        } else out += "? Charge cycles: not reported by the phone"
-        val full = if (n.contains("full")) n.getInt("full", 0) else if (n.contains("learned")) n.getInt("learned", 0) else null
-        if (full != null) {
-            val pct = full * 100 / design
-            when {
-                pct >= 95 -> { good++; out += "✓ Capacity: ${fmt(full)} of ${fmt(design)} mAh ($pct%)" }
-                pct >= 85 -> out += "! Capacity: ${fmt(full)} mAh ($pct%). New batteries need 2–3 full charges to calibrate - check again in 3 days."
-                else -> { bad++; out += "✗ Capacity: only ${fmt(full)} mAh ($pct%) - too low for a new battery" }
-            }
-        } else out += "? Capacity: not reported yet - charge to 100% once and check again"
-        val id0 = b.getString("ids", "").orEmpty(); val id1 = n.getString("ids", "").orEmpty()
-        if (id0.isNotBlank() && id1.isNotBlank()) {
-            if (id0 != id1) { good++; out += "✓ Battery ID changed" } else { bad++; out += "✗ Battery ID is the same as before" }
-        } else out += "? Battery ID: the phone doesn't expose one"
-        out += when {
-            bad == 0 && good >= 2 -> "\nVerdict: ✓ The battery was replaced with a new one."
-            bad > 0 -> "\nVerdict: ✗ Something doesn't add up - ask the service centre before you leave."
-            else -> "\nVerdict: ? Not enough proof yet. Charge to 100%, use it a day, then tap 2 again."
-        }
-        tv.text = out.joinToString("\n")
+        val live = BatteryStats.report(this)
+        val design = n.getInt("design", live.designMah)
+        val beforeAt = b.getLong("at", 0)
+        if (!b.contains("afterAt")) b.edit().putLong("afterAt", System.currentTimeMillis()).apply()
+        val afterAt = b.getLong("afterAt", System.currentTimeMillis())
+        fun cap(p: android.content.SharedPreferences) =
+            if (p.contains("full")) p.getInt("full", 0) else if (p.contains("learned")) p.getInt("learned", 0) else null
+        val out = ReplacementCheck.evaluate(ReplacementCheck.Input(
+            designMah = design,
+            cyclesBefore = if (b.contains("cycles")) b.getInt("cycles", 0) else null,
+            cyclesNow = if (n.contains("cycles")) n.getInt("cycles", 0) else null,
+            capBefore = cap(b) ?: if (b.contains("liveCap")) b.getInt("liveCap", 0) else null,
+            capNow = cap(n) ?: live.capacityMah,
+            idBefore = b.getString("ids", null), idNow = n.getString("ids", null),
+            drainBefore = BatteryStats.drainBetween(this, beforeAt - 7L * 86_400_000, beforeAt),
+            drainAfter = BatteryStats.drainBetween(this, afterAt, System.currentTimeMillis()),
+            daysSince = (System.currentTimeMillis() - afterAt) / 86_400_000.0,
+            fullChargesSince = BatteryStats.fullChargesSince(this, afterAt),
+        ))
+        tv.text = (out.lines + "" + out.summary).joinToString("\n")
     }
 
     private data class Tile(val label: String, val value: String, val sub: String)
