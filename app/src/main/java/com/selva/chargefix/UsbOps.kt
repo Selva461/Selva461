@@ -69,7 +69,11 @@ object UsbOps {
 
     private fun pickPort(mgr: Any, log: StringBuilder): String? {
         val ports = mgr.javaClass.getMethod("getPorts").invoke(mgr) as List<*>
-        val ids = ports.mapNotNull { p -> p?.javaClass?.getMethod("getId")?.invoke(p) as? String }
+        val ids = ports.mapNotNull { p -> p?.let { portId(it) } }.ifEmpty {
+            // Last resort: read the port name from "dumpsys usb ports" (e.g. "id=port0").
+            Regex("""\bid[=:]\s*"?([A-Za-z0-9_\-]+)""").find(exec("dumpsys usb ports"))?.groupValues?.get(1)
+                ?.let { listOf(it) } ?: emptyList()
+        }
         val connected = ids.firstOrNull { id ->
             runCatching {
                 val st = mgr.javaClass.getMethod("getPortStatus", String::class.java).invoke(mgr, id)
@@ -81,7 +85,12 @@ object UsbOps {
         return id
     }
 
-    /** Calls an IUsbManager method that reports its result through IUsbOperationInternal. */
+    /** ParcelableUsbPort has no getId() on Android 12-14; the id is the private field mId. */
+    internal fun portId(p: Any): String? =
+        runCatching { p.javaClass.getMethod("getId").invoke(p) as? String }.getOrNull()
+            ?: runCatching { p.javaClass.getDeclaredField("mId").apply { isAccessible = true }.get(p) as? String }.getOrNull()
+
+        /** Calls an IUsbManager method that reports its result through IUsbOperationInternal. */
     private fun call(mgr: Any, name: String, port: String, flag: Boolean?): Int {
         val cb = OpCallback()
         val cbIface = Class.forName("android.hardware.usb.IUsbOperationInternal\$Stub")
