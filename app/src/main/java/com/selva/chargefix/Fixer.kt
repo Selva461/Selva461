@@ -11,12 +11,15 @@ object Fixer {
 
     enum class Method(val key: String, val label: String) {
         ROOT("root", "Root: charging switch off/on"),
+        OTG_OFF(UsbOps.OP_OTG_OFF, "Turn off OTG, back to charging mode"),
         LIMIT_POWER(UsbOps.OP_LIMIT_POWER, "Limit USB power on/off"),
         PORT_RESET(UsbOps.OP_PORT_RESET, "Reset USB-C port"),
         ROLE_SWAP(UsbOps.OP_ROLE_SWAP, "USB power-role swap"),
     }
 
-    private val NO_ROOT_METHODS = listOf(Method.LIMIT_POWER, Method.PORT_RESET, Method.ROLE_SWAP)
+    // OTG/role first: on the OnePlus 9R the stuck state is the port acting as a power SOURCE.
+    // Limit-power and port-reset are NOT_SUPPORTED by the 9R's USB driver, so they go last.
+    private val NO_ROOT_METHODS = listOf(Method.OTG_OFF, Method.ROLE_SWAP, Method.LIMIT_POWER, Method.PORT_RESET)
     private const val VERIFY_SEC = 20
 
     data class Outcome(val fixed: Boolean, val method: Method?, val log: String)

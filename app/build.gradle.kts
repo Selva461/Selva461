@@ -11,8 +11,8 @@ android {
         applicationId = "com.selva.chargefix"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "5.2"
+        versionCode = 12
+        versionName = "5.3"
         // The OnePlus 9R (and nearly every phone since 2017) is 64-bit ARM.
         ndk { abiFilters += listOf("arm64-v8a") }
     }

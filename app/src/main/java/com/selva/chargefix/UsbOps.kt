@@ -29,6 +29,27 @@ object UsbOps {
             val mgr = usbManager()
             val port = pickPort(mgr, log) ?: return log.append("No USB port found.").toString()
             when (op) {
+                OP_OTG_OFF -> {
+                    log.appendLine("Port before: ${portRoles()}")
+                    // OxygenOS keeps its OTG switch in Settings; find any OTG key that is on and turn it off.
+                    val found = exec("for ns in system secure global; do settings list \$ns 2>/dev/null | " +
+                        "grep -i otg | sed \"s/^/\$ns /\"; done")
+                    val on = found.lines().mapNotNull { l ->
+                        val ns = l.substringBefore(' '); val kv = l.substringAfter(' ')
+                        val k = kv.substringBefore('='); val v = kv.substringAfter('=', "")
+                        if (k.isNotBlank() && v.trim() == "1") ns to k else null
+                    }
+                    if (found.isBlank()) log.appendLine("No OTG setting found.")
+                    else log.appendLine("OTG settings: " + found.lines().joinToString(", ") { it.substringAfter(' ') })
+                    on.forEach { (ns, k) ->
+                        exec("settings put $ns $k 0")
+                        log.appendLine("Turned off $ns/$k")
+                    }
+                    // Ask the port to be a charging (sink) port again.
+                    exec("dumpsys usb set-port-roles $port sink device")
+                    Thread.sleep(pauseSec * 1000L)
+                    log.appendLine("Port after:  ${portRoles()}")
+                }
                 OP_LIMIT_POWER -> {
                     log.appendLine("Limit power ON  -> ${statusName(call(mgr, "enableLimitPowerTransfer", port, true))}")
                     Thread.sleep(pauseSec * 1000L)
@@ -38,11 +59,16 @@ object UsbOps {
                     log.appendLine("Reset USB port -> ${statusName(call(mgr, "resetUsbPort", port, null))}")
                 }
                 OP_ROLE_SWAP -> {
+                    log.appendLine("Port before: ${portRoles()}")
                     log.appendLine(exec("dumpsys usb set-port-roles $port source host").lineSequence().take(3).joinToString(" | "))
                     Thread.sleep(pauseSec * 1000L)
                     log.appendLine(exec("dumpsys usb set-port-roles $port sink device").lineSequence().take(3).joinToString(" | "))
+                    Thread.sleep(3000)
+                    log.appendLine("Port after:  ${portRoles()}")
                 }
                 OP_INFO -> {
+                    log.appendLine("Port roles: ${portRoles()}")
+                    log.appendLine("OTG settings: " + exec("for ns in system secure global; do settings list \$ns 2>/dev/null | grep -i otg; done").ifBlank { "none" })
                     val hal = runCatching { mgr.javaClass.getMethod("getUsbHalVersion").invoke(mgr) }.getOrNull()
                     log.appendLine("USB HAL version code: $hal")
                     runCatching {
@@ -85,6 +111,18 @@ object UsbOps {
         return id
     }
 
+    /** Current mode / power role / data role of the USB-C port, e.g. "mode=dfp power=source data=host". */
+    private fun portRoles(): String {
+        val d = exec("dumpsys usb ports")
+        fun pick(k: String) = Regex("""$k[=:]\s*"?([a-z_]+)""").find(d)?.groupValues?.get(1)
+        val mode = pick("current_mode") ?: pick("currentMode")
+        // dumpsys text: "current_mode=dfp ... power_role=source data_role=host" (first match = current status)
+        val power = pick("power_role") ?: pick("currentPowerRole")
+        val data = pick("data_role") ?: pick("currentDataRole")
+        return if (mode == null && power == null) "unknown" else "mode=$mode power=$power data=$data" +
+            if (power == "source") "  ← phone is GIVING power (OTG), not charging" else ""
+    }
+
     /** ParcelableUsbPort has no getId() on Android 12-14; the id is the private field mId. */
     internal fun portId(p: Any): String? =
         runCatching { p.javaClass.getMethod("getId").invoke(p) as? String }.getOrNull()
@@ -118,6 +156,7 @@ object UsbOps {
 
     // ---- constants ----
     const val OP_LIMIT_POWER = "limit_power"
+    const val OP_OTG_OFF = "otg_off"
     const val OP_PORT_RESET = "port_reset"
     const val OP_ROLE_SWAP = "role_swap"
     const val OP_INFO = "info"
